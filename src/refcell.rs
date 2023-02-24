@@ -32,16 +32,24 @@ impl<T> RefCell<T> {
         }
     }
 
-    pub fn borrow_mut(&self) -> Option<&mut T> {
+    pub fn borrow_mut(&self) -> Option<RefMut<T>> {
         if let RefState::Unshared = self.state.get() {
-            return Some(unsafe { &mut *self.value.get() });
+            self.state.set(RefState::Exclusive);
+            return Some(RefMut { refcell: self });
         }
         None
     }
 }
 
-struct Ref<'refcell, T> {
+pub struct Ref<'refcell, T> {
     refcell: &'refcell RefCell<T>,
+}
+
+impl<T> std::ops::Deref for Ref<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.refcell.value.get() }
+    }
 }
 
 impl<T> Drop for Ref<'_, T> {
@@ -56,7 +64,26 @@ impl<T> Drop for Ref<'_, T> {
     }
 }
 
-impl<T> std::ops::Deref for Ref<'_, T> {
+pub struct RefMut<'refcell, T> {
+    refcell: &'refcell RefCell<T>,
+}
+
+impl<T> Drop for RefMut<'_, T> {
+    fn drop(&mut self) {
+        match self.refcell.state.get() {
+            RefState::Shared(_) | RefState::Unshared => unreachable!(),
+            RefState::Exclusive => self.refcell.state.set(RefState::Unshared),
+        }
+    }
+}
+
+impl<T> std::ops::DerefMut for RefMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.refcell.value.get() }
+    }
+}
+
+impl<T> std::ops::Deref for RefMut<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.refcell.value.get() }
@@ -65,14 +92,19 @@ impl<T> std::ops::Deref for Ref<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Deref;
-
     use super::RefCell;
     #[test]
-    fn works() {
+    fn works_ref() {
         let c = RefCell::new(23);
-        if let Some(r) = c.borrow() {
-            eprintln!("{:?}", r.deref());
-        }
+        let l = c.borrow().unwrap();
+        eprintln!("{:?}", *l);
+    }
+    #[test]
+    fn works_ref_mut() {
+        let c = RefCell::new(23);
+        let mut l = c.borrow_mut().unwrap();
+        *l = 24;
+        drop(l);
+        let _ = c.borrow().unwrap();
     }
 }
